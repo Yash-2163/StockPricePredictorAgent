@@ -1,0 +1,10 @@
+# Virtual Environment
+venv/
+__pycache__/
+
+# IDE / OS specific
+.vscode/
+.DS_Store
+
+# Environment variables file (if you create one)
+.env
