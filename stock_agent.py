@@ -460,7 +460,8 @@ def synthesizer_node(state: AgentState) -> AgentState:
 
 # In stock_agent.py
 
-# ... (keep all other imports and agent functions as they are) ...
+# In stock_agent.py - place this function before communicator_node
+
 def format_crisp_analysis_as_html(analysis: StrategyAnalysis, ticker: str) -> str:
     """Formats the Pydantic StrategyAnalysis object into a crisp HTML email."""
     # We now access attributes directly (e.g., analysis.timeline_strategy)
@@ -497,28 +498,34 @@ def format_crisp_analysis_as_html(analysis: StrategyAnalysis, ticker: str) -> st
     """
     return html
 
-def communicator_node(state: AgentState) -> AgentState:
-    """Agent 5: Formats the final STRATEGIC analysis and sends it via email."""
-    print("---AGENT 5: COMMUNICATING STRATEGIC RESULTS---")
-    analysis = state.get('analysis', {})
-    if "error" in analysis or not analysis:
-        print("Analysis contains an error or is empty. Skipping communication.")
-        return {**state, "communication_status": "SKIPPED"}
 
+# ... (keep all other imports and agent functions as they are) ...
+def communicator_node(state: AgentState) -> AgentState:
+    """Agent 5: Formats analysis, SAVES it to state, and sends via email."""
+    print("---AGENT 5: COMMUNICATING STRATEGIC RESULTS---")
+    analysis = state.get('analysis')
+    # Check for errors or if analysis is None
+    if not analysis or isinstance(analysis, dict) and "error" in analysis:
+        print("Analysis contains an error or is empty. Skipping communication.")
+        return {**state, "communication_status": "SKIPPED", "html_report": ""}
+
+    ticker = state['ticker']
+    # This calls the function you just updated
+    html_body = format_crisp_analysis_as_html(analysis, ticker)
+    
+    # Save the generated HTML to the state for the UI preview
+    state['html_report'] = html_body
+    
     sender_email = os.environ.get("EMAIL_SENDER")
     password = os.environ.get("EMAIL_PASSWORD")
     recipient_email = os.environ.get("EMAIL_RECIPIENT")
     
     if not all([sender_email, password, recipient_email]):
         print("Email credentials not set. Skipping email.")
-        return {**state, "communication_status": "FAILED: Credentials not set."}
+        state['communication_status'] = "FAILED: Credentials not set."
+        return state
         
-    ticker = state['ticker']
     subject = f"Alpha's Strategy for {ticker.upper()}"
-    
-    # This call is now simpler and correctly uses the new HTML function
-    html_body = format_crisp_analysis_as_html(analysis, ticker)
-
     msg = MIMEMultipart()
     msg['From'] = sender_email
     msg['To'] = recipient_email
@@ -531,10 +538,59 @@ def communicator_node(state: AgentState) -> AgentState:
             server.login(sender_email, password)
             server.send_message(msg)
         print(f"Successfully sent strategic email report to {recipient_email}")
-        return {**state, "communication_status": "SUCCESS"}
+        state['communication_status'] = "SUCCESS"
     except Exception as e:
         print(f"Failed to send email: {e}")
-        return {**state, "communication_status": f"FAILED: {e}"}
+        state['communication_status'] = f"FAILED: {e}"
+    
+    return state
+
+def communicator_node(state: AgentState) -> AgentState:
+    """Agent 5: Formats analysis, SAVES it to state, and sends via email."""
+    print("---AGENT 5: COMMUNICATING STRATEGIC RESULTS---")
+    analysis = state.get('analysis')
+    if not analysis or isinstance(analysis, dict) and "error" in analysis:
+        print("Analysis contains an error or is empty. Skipping communication.")
+        # We must still initialize the html_report field in the state
+        state['html_report'] = "<html><body>Analysis failed.</body></html>"
+        state['communication_status'] = "SKIPPED"
+        return state
+
+    ticker = state['ticker']
+    html_body = format_crisp_analysis_as_html(analysis, ticker)
+    
+    # This is the correct way to modify the state
+    state['html_report'] = html_body
+    
+    # (The rest of the email sending logic is the same)
+    sender_email = os.environ.get("EMAIL_SENDER")
+    password = os.environ.get("EMAIL_PASSWORD")
+    recipient_email = os.environ.get("EMAIL_RECIPIENT")
+    
+    if not all([sender_email, password, recipient_email]):
+        print("Email credentials not set. Skipping email.")
+        state['communication_status'] = "FAILED: Credentials not set."
+        return state
+        
+    subject = f"Alpha's Strategy for {ticker.upper()}"
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient_email
+    msg['Subject'] = subject
+    msg.attach(MIMEText(html_body, 'html'))
+
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(sender_email, password)
+            server.send_message(msg)
+        print(f"Successfully sent strategic email report to {recipient_email}")
+        state['communication_status'] = "SUCCESS"
+    except Exception as e:
+        print(f"Failed to send email: {e}")
+        state['communication_status'] = f"FAILED: {e}"
+    
+    return state
 
 
 
@@ -617,19 +673,16 @@ def communicator_node(state: AgentState) -> AgentState:
 
 
 
-
 def run_full_analysis(ticker: str, recipient_email: str):
     """
-    This function initializes and runs the entire agent graph for a given
-    ticker and sends the result to the specified email.
+    Initializes and runs the agent graph, then returns both the final
+    state and the generated HTML report for previewing.
     """
-    # This is crucial: it sets the recipient's email for the communicator agent
     os.environ['EMAIL_RECIPIENT'] = recipient_email
-
-    # The rest of this is the logic from our old build_and_run_graph function
+    
     workflow = StateGraph(AgentState)
 
-    # Add all nodes...
+    # Add all nodes
     workflow.add_node("data_collector", fetch_data_node)
     workflow.add_node("model_runner", model_runner_node)
     workflow.add_node("anomaly_detector", anomaly_detector_node)
@@ -640,7 +693,7 @@ def run_full_analysis(ticker: str, recipient_email: str):
     workflow.add_node("synthesizer", synthesizer_node)
     workflow.add_node("communicator", communicator_node)
 
-    # Define the graph's edges...
+    # Define the graph's edges
     workflow.set_entry_point("data_collector")
     workflow.add_edge("data_collector", "model_runner")
     workflow.add_edge("model_runner", "anomaly_detector")
@@ -653,15 +706,19 @@ def run_full_analysis(ticker: str, recipient_email: str):
     workflow.add_edge("communicator", END)
 
     app = workflow.compile()
-
-    # Define the initial state for the run
+    
     initial_state = {
         "ticker": ticker, "data": pd.DataFrame(), "prediction": [], "model_confidence": 0.0,
         "news": [], "analysis": None, "communication_status": "", "anomalies": [],
-        "analyst_ratings": {}, "upcoming_events": "", "risk_assessment": {}
+        "analyst_ratings": {}, "upcoming_events": "", "risk_assessment": {},
+        "html_report": "" # Initialize the new field
     }
     
-    # Run the graph and return the final state
     print(f"---INVOKING AGENT WORKFLOW FOR {ticker.upper()}---")
     final_state = app.invoke(initial_state)
-    return final_state
+    
+    # Return a dictionary in the format the UI expects
+    return {
+        "state": final_state,
+        "html_report": final_state.get("html_report", "<html><body>Preview not available.</body></html>")
+    }

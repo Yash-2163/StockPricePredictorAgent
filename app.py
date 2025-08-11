@@ -1,8 +1,12 @@
-# In app.py
 import streamlit as st
 import os
 import io
 import contextlib
+import traceback
+
+
+from dotenv import load_dotenv
+load_dotenv() # This line reads the .env file and loads the variables
 
 # Import our main agent function from the other file
 from stock_agent import run_full_analysis
@@ -18,7 +22,8 @@ st.set_page_config(
 st.title("AlphaStrat 📈")
 st.write(
     "Your personal AI stock strategist. Provide a stock ticker and your email, "
-    "and AlphaStrat will perform a comprehensive analysis and email you the report."
+    "and AlphaStrat will perform a comprehensive analysis, email you the report, "
+    "and show a preview below."
 )
 
 with st.form("input_form"):
@@ -26,7 +31,6 @@ with st.form("input_form"):
     email_input = st.text_input("Enter Your Email Address")
     submit_button = st.form_submit_button("Run Analysis")
 
-# This block executes when the user clicks the button
 if submit_button:
     if not ticker_input:
         st.error("Please enter a stock ticker.")
@@ -36,18 +40,18 @@ if submit_button:
         # Show a spinner and create a placeholder for the log output
         with st.spinner(f"Running comprehensive analysis for {ticker_input.upper()}... This can take a minute."):
             log_stream = io.StringIO()
-            
-            # Redirect all print statements to our in-app log window
-            with contextlib.redirect_stdout(log_stream):
+
+            with contextlib.redirect_stdout(log_stream), contextlib.redirect_stderr(log_stream):
                 try:
-                    # Call the main agent function from stock_agent.py
-                    final_state = run_full_analysis(ticker_input, email_input)
+                    result = run_full_analysis(ticker_input, email_input)
+                    final_state = result["state"]
+                    html_preview = result.get("html_report")
                     status = final_state.get('communication_status', 'Status not available')
-                    
                 except Exception as e:
+                    traceback.print_exc(file=log_stream)
                     status = f"An error occurred: {e}"
-            
-            # Display the final status and the captured log
+                    html_preview = None
+
             if "SUCCESS" in status:
                 st.success(f"Analysis complete! Final status: {status}")
             else:
@@ -55,3 +59,7 @@ if submit_button:
 
             st.subheader("Agent Activity Log:")
             st.text_area("Log", log_stream.getvalue(), height=300)
+
+            if html_preview:
+                st.subheader("📄 Report Preview")
+                st.markdown(html_preview, unsafe_allow_html=True)
